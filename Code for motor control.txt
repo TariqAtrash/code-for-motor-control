@@ -1,0 +1,180 @@
+#include <Arduino.h>
+
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
+
+// Define motor direction pins
+#define AIN1 14
+#define BIN1 26
+#define AIN2 27
+#define BIN2 25
+
+// Define PWM pins
+#define PWMA 19  // Right motor PWM
+#define PWMB 18  // Left motor PWM
+
+#define LEFT_ENC_A 32
+#define LEFT_ENC_B 13
+
+#define RIGHT_ENC_A 33
+#define RIGHT_ENC_B 12
+
+// Set desired PWM frequency and resolution
+const int pwmFreq = 1000;       // 10 kHz PWM frequency
+const int pwmResolution = 8;    // 10-bit resolution (values 0–1023)
+
+esp_timer_handle_t controller_timer = nullptr;
+
+volatile int timerCounts = 0 ; 
+
+volatile int pwmCurrent = 100 ;
+
+volatile int leftEncoderCounts = 0 ; 
+volatile int RightEncoderCounts = 0 ; 
+volatile int turn = 1 ;
+const int bias = 10 ; 
+
+void IRAM_ATTR ControllerLogic(void* arg) {
+  
+  portENTER_CRITICAL(&mux);
+  timerCounts +=1 ; 
+  if (timerCounts % 500 == 0){
+
+      if (turn == 1){
+        turn = 0 ; 
+        pwmCurrent += 10 ; 
+        if (pwmCurrent >= 255 - bias){
+          pwmCurrent = 100 ; 
+        }
+        setRightPwm(pwmCurrent + bias);
+        setLeftPwm(pwmCurrent);
+        
+      }
+      else{
+        turn = 1 ; 
+        pwmCurrent += 10 ; 
+        if (pwmCurrent >= 255 - bias){
+          pwmCurrent = 100 ; 
+        }
+        setLeftPwm(pwmCurrent);
+        setRightPwm(pwmCurrent + bias);
+
+      }
+
+  }
+
+  portEXIT_CRITICAL(&mux);
+
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Set up the motor direction pins as outputs
+  pinMode(AIN1, OUTPUT);
+  pinMode(AIN2, OUTPUT);
+  pinMode(BIN1, OUTPUT);
+  pinMode(BIN2, OUTPUT);
+
+  // Configure LEDC PWM using the new API (Arduino ESP32 Core 3.0)
+  ledcAttach(PWMB, pwmFreq, pwmResolution);  // Left motor (PWMB)
+  ledcAttach(PWMA, pwmFreq, pwmResolution);  // Right motor (PWMA)
+
+  setLeftPwm(pwmCurrent);
+  setRightPwm(pwmCurrent+bias);
+
+  // Configure timer parameters
+  esp_timer_create_args_t timer_args = {
+    .callback = &ControllerLogic,
+    .arg = nullptr,
+    .dispatch_method = ESP_TIMER_TASK, // Safer to use task dispatch for Serial
+    .name = "1ms_timer",
+    .skip_unhandled_events = true
+  };
+
+  // Create and start the timer
+  ESP_ERROR_CHECK(esp_timer_create(&timer_args, &controller_timer));
+  ESP_ERROR_CHECK(esp_timer_start_periodic(controller_timer, 1000)); // 1000µs = 1ms
+
+  
+  pinMode(LEFT_ENC_A,INPUT);
+  pinMode(LEFT_ENC_B,INPUT);
+
+  pinMode(RIGHT_ENC_A,INPUT);
+  pinMode(RIGHT_ENC_B,INPUT);
+
+  attachInterrupt(digitalPinToInterrupt(RIGHT_ENC_A),readRightEncoder,RISING);
+  attachInterrupt(digitalPinToInterrupt(LEFT_ENC_B),readLeftEncoder,RISING);
+
+
+}
+
+void setLeftPwm(int pwm) {
+  // Set motor direction for the left motor (PWM on PWMB)
+  if (pwm > 0) {
+    digitalWrite(BIN1, HIGH);
+    digitalWrite(BIN2, LOW);
+  } else {
+    pwm = -pwm;  // Reverse direction for negative values
+    digitalWrite(BIN2, HIGH);
+    digitalWrite(BIN1, LOW);
+  }
+
+  // Use ledcWrite to output PWM signal on the left motor channel
+  ledcWrite(PWMB, pwm);
+}
+
+void setRightPwm(int pwm) {
+  // Set motor direction for the right motor (PWM on PWMA)
+  if (pwm > 0) {
+    digitalWrite(AIN1, HIGH);
+    digitalWrite(AIN2, LOW);
+  } else {
+    pwm = -pwm;  // Reverse direction for negative values
+    digitalWrite(AIN2, HIGH);
+    digitalWrite(AIN1, LOW);
+  }
+
+  // Use ledcWrite to output PWM signal on the right motor channel
+  ledcWrite(PWMA, pwm);
+}
+
+void readLeftEncoder(){
+  portENTER_CRITICAL(&mux);
+  int b = digitalRead(LEFT_ENC_B);
+  if(b > 0){
+    leftEncoderCounts++;
+  }
+  else{
+    leftEncoderCounts--;
+  }
+   portEXIT_CRITICAL(&mux);
+}
+
+void readRightEncoder(){
+  portENTER_CRITICAL(&mux);
+  int b = digitalRead(RIGHT_ENC_B);
+  if(b > 0){
+    RightEncoderCounts++;
+  }
+  else{
+    RightEncoderCounts--;
+  }
+   portEXIT_CRITICAL(&mux);
+}
+
+int prevPrint = 0 ;  
+
+void loop() {
+
+  
+
+  if (timerCounts % 1000 == 0){
+    Serial.println("Encoder Counts =");
+    Serial.println(leftEncoderCounts);
+    Serial.println(RightEncoderCounts); 
+  }
+    
+
+
+}
